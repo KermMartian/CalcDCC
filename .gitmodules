@@ -1,3 +1,6 @@
 [submodule "CmdrArduino"]
 	path = CmdrArduino
 	url = https://github.com/Railstars/CmdrArduino
+[submodule "ArTICL"]
+	path = ArTICL
+	url = https://github.com/KermMartian/ArTICL
