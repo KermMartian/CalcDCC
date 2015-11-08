@@ -6,27 +6,28 @@
  */
 
 #include <EEPROM.h>
+#include <Wire.h>
+
+// ArTICL headers
 #include <CBL2.h>
 #include <TIVar.h>
 
+// CmdrArduino headers
 #include <DCCPacket.h>
 #include <DCCPacketQueue.h>
 #include <DCCPacketScheduler.h>
 
 int LED = 13; // LED to blink when DCC packets are sent in loop
-int Enable_PIN = 8; //low to enable DCC, high to stop
+int ENABLE_PIN = 8; //low to enable DCC, high to stop
 
 DCCPacketScheduler dps;
 //unsigned int analog_value=0;
-char speed_byte = 0;
-char old_speed = 0;
-bool force_update = false;
+char speed_byte = 0;    // Current speed
+char old_speed = 0;     // Old speed for comparison
 char temp;
 byte Fx = 0;
-byte DCCAddress = 3;
-bool enable = true;
-
-#include <Wire.h>
+byte DCCAddress = 3;    // Current loco
+bool enable = true;     // Used for E-stop
 
 byte fn0to4 = 0;  // DCC function variables
 byte fn5to8 = 0;
@@ -53,10 +54,15 @@ void setup() {
   if(DCCAddress >=100){  // set default as 3 if not in proper range (0-99)
     DCCAddress = 3;
   }
-  pinMode(Enable_PIN, OUTPUT); 
+  
+  // DCC enable pin
+  pinMode(ENABLE_PIN, OUTPUT); 
   enable = true;
 
+  // Set up serial
   Serial.begin(115200);
+  
+  // Set up DCC Packet Scheduler
   dps.setup();
   dps.setFunctions0to4(DCCAddress, DCC_SHORT_ADDRESS, B00000000); //clear functions
   dps.setFunctions5to8(DCCAddress, DCC_SHORT_ADDRESS, B00000000);    
@@ -75,21 +81,15 @@ void setup() {
 }
 
 void loop() {
-  //this section sends DCC updates every 2 seconds (interval)
-  // not sure if it is necessary but the functions are slow to respond
-  // at times - may be due to the DCC library setting priorities as the
-  // speed controls always work 
+  // Keep flashing the Arduino's LED as long as nothing froze.
   unsigned long currentMillis = millis();
-  if (currentMillis - previousMillis > interval || force_update) {
+  if (currentMillis - previousMillis > interval) {
     previousMillis = currentMillis;  
-    dps.setSpeed128(DCCAddress, DCC_SHORT_ADDRESS, speed_byte);
-    dps.setFunctions(DCCAddress, DCC_SHORT_ADDRESS, fn0to4, fn5to8, fn9to12);
     digitalWrite(LED, !digitalRead(LED));
-    force_update = false;
   }
   
   if (enable) {
-    digitalWrite(Enable_PIN, LOW);// HIGH = disable DCC <- Why do we need to do this every loop?
+    digitalWrite(ENABLE_PIN, LOW);// HIGH = disable DCC <- Why do we need to do this every loop?
   }
   
   // Get input from calculator
@@ -100,12 +100,6 @@ void loop() {
     Serial.println(rval);
   }
 
-  //Functions will not work without this to limit speed command to only new speeds
-  if (speed_byte != old_speed) {
-    speed_byte = constrain(speed_byte, -127, 127);
-    dps.setSpeed128(DCCAddress,DCC_SHORT_ADDRESS,speed_byte);
-    old_speed = speed_byte;
-  } 
   dps.update();
 }  //END LOOP
 
@@ -133,7 +127,7 @@ int onGetAsCBL2(uint8_t type, enum Endpoint model, int datalen) {
     switch(command) {
       case 0: {
         enable = false;
-        digitalWrite(Enable_PIN, HIGH);// HIGH = disable DCC
+        digitalWrite(ENABLE_PIN, HIGH);      // HIGH = disable DCC
         Serial.println("EMERGENCY STOP");
         break;
       }
@@ -152,10 +146,13 @@ int onGetAsCBL2(uint8_t type, enum Endpoint model, int datalen) {
         bool val = (int)TIVar::realToFloat8x(&data[2 + (2 * 9)], model);
         if (func >= 1 && func <= 4) {
           fn0to4  = (fn0to4 & ~(1 << (func - 1))) | (val << (func - 1));
+          dps.setFunctions0to4(DCCAddress, DCC_SHORT_ADDRESS, fn0to4);
         } else if (func >= 5 && func <= 8) {
           fn5to8  = (fn5to8 & ~(1 << (func - 5))) | (val << (func - 5));
+          dps.setFunctions5to8(DCCAddress, DCC_SHORT_ADDRESS, fn0to4);
         } else if (func >= 9 && func <= 12) {
           fn9to12 = (fn9to12 & ~(1 << (func - 9))) | (val << (func - 9));
+          dps.setFunctions9to12(DCCAddress, DCC_SHORT_ADDRESS, fn0to4);
         }
         Serial.print("Functions set to ");
         Serial.print(fn0to4);
@@ -163,14 +160,14 @@ int onGetAsCBL2(uint8_t type, enum Endpoint model, int datalen) {
         Serial.print(fn5to8);
         Serial.print(", ");
         Serial.println(fn9to12);
-        force_update = true;
         break;
       }
       case 3: {
         speed_byte = (int)TIVar::realToFloat8x(&data[2 + (1 * 9)], model);
+        speed_byte = constrain(speed_byte, -127, 127);
+        dps.setSpeed128(DCCAddress,DCC_SHORT_ADDRESS,speed_byte);
         Serial.print("Speed set to ");
         Serial.println((int)speed_byte);
-        force_update = true;
         break;
       }
     }
