@@ -17,8 +17,8 @@
 #include <DCCPacketQueue.h>
 #include <DCCPacketScheduler.h>
 
-int LED = 13; // LED to blink when DCC packets are sent in loop
-int ENABLE_PIN = 8; //low to enable DCC, high to stop
+const int LED = 13; // LED to blink when DCC packets are sent in loop
+const int ENABLE_PIN = 8; //low to enable DCC, high to stop
 
 DCCPacketScheduler dps;
 //unsigned int analog_value=0;
@@ -28,6 +28,7 @@ char temp;
 byte Fx = 0;
 byte DCCAddress = 3;    // Current loco
 bool enable = true;     // Used for E-stop
+const unsigned long CV_PROGRAMMING_DELAY = 50000;
 
 byte fn0to4 = 0;  // DCC function variables
 byte fn5to8 = 0;
@@ -36,7 +37,7 @@ byte fn9to12 = 0;
 unsigned long previousMillis = 0; // last time update
 const long interval = 2000; // interval at which to do refresh (milliseconds)
 
-CBL2* cbl;
+CBL2 cbl;
 const int lineRed = DEFAULT_TIP;
 const int lineWhite = DEFAULT_RING;
 
@@ -68,13 +69,13 @@ void setup() {
   dps.setFunctions5to8(DCCAddress, DCC_SHORT_ADDRESS, B00000000);    
   dps.setFunctions9to12(DCCAddress, DCC_SHORT_ADDRESS, B00000000);    
 
-  cbl = new CBL2(lineRed, lineWhite);
-  cbl->resetLines();
-  //cbl->setVerbosity(true, &Serial);			// Comment this in for verbose message information
+  cbl.setLines(lineRed, lineWhite);
+  cbl.resetLines();
+  //cbl.setVerbosity(true, &Serial);			// Comment this in for verbose message information
   
   // The following registers buffers for exchanging data, the maximum
   // allowed data length, and functions to call on Get() and Send().
-  cbl->setupCallbacks(header, data, MAXDATALEN,
+  cbl.setupCallbacks(header, data, MAXDATALEN,
                       onGetAsCBL2, onSendAsCBL2);
     fn0to4 = 1;
     speed_byte = 1;
@@ -94,7 +95,7 @@ void loop() {
   
   // Get input from calculator
   int rval = 0;
-  rval = cbl->eventLoopTick();
+  rval = cbl.eventLoopTick();
   if (rval && rval != ERR_READ_TIMEOUT) {
     Serial.print("Failed to run eventLoopTick: code ");
     Serial.println(rval);
@@ -123,7 +124,7 @@ int onGetAsCBL2(uint8_t type, enum Endpoint model, int datalen) {
   //   [3, speed] :        Set speed
   //   [0]:                Emergency disable
   if (list_len >= 1) {
-    int command = (int)TIVar::realToFloat8x(&data[2], model);	// First list element starts after 2-byte size word
+    int command = (int)TIVar::realToLong8x(&data[2], model);	// First list element starts after 2-byte size word
     switch(command) {
       case 0: {
         enable = false;
@@ -132,18 +133,22 @@ int onGetAsCBL2(uint8_t type, enum Endpoint model, int datalen) {
         break;
       }
       case 1: {
-        int CV = (int)TIVar::realToFloat8x(&data[2 + (1 * 9)], model);
-        int val = (int)TIVar::realToFloat8x(&data[2 + (2 * 9)], model);
+        int cv =  (int)TIVar::realToLong8x(&data[2 + (1 * 9)], model);
+        int val = (int)TIVar::realToLong8x(&data[2 + (2 * 9)], model);
         Serial.print("Setting CV ");
-        Serial.print(CV);
+        Serial.print(cv);
         Serial.print(" to ");
         Serial.println(val);
-        dps.opsProgramCV(DCCAddress, DCC_SHORT_ADDRESS, CV, val);
+        dps.opsProgramCV(DCCAddress, DCC_SHORT_ADDRESS, cv, val);
+        unsigned long previousMicros = micros();
+        while(micros() - previousMicros < CV_PROGRAMMING_DELAY) {
+          dps.update();
+        }
         break;
       }
       case 2: {
-        int func = (int)TIVar::realToFloat8x(&data[2 + (1 * 9)], model);
-        bool val = (int)TIVar::realToFloat8x(&data[2 + (2 * 9)], model);
+        int func = (int)TIVar::realToLong8x(&data[2 + (1 * 9)], model);
+        bool val = (int)TIVar::realToLong8x(&data[2 + (2 * 9)], model);
         if (func >= 1 && func <= 4) {
           fn0to4  = (fn0to4 & ~(1 << (func - 1))) | (val << (func - 1));
           dps.setFunctions0to4(DCCAddress, DCC_SHORT_ADDRESS, fn0to4);
@@ -163,7 +168,7 @@ int onGetAsCBL2(uint8_t type, enum Endpoint model, int datalen) {
         break;
       }
       case 3: {
-        speed_byte = (int)TIVar::realToFloat8x(&data[2 + (1 * 9)], model);
+        speed_byte = (int)TIVar::realToLong8x(&data[2 + (1 * 9)], model);
         speed_byte = constrain(speed_byte, -127, 127);
         dps.setSpeed128(DCCAddress,DCC_SHORT_ADDRESS,speed_byte);
         Serial.print("Speed set to ");
